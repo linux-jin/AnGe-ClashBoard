@@ -29,6 +29,7 @@ const {
   createAccessSessionTokenForTesting,
   getRequestAccessAuthStatusForTesting,
   replaceSnapshot,
+  resolveOpenClashConfigPathFromUciForTesting,
   searchRuleProviderCache,
   seedRuleProviderCacheForTesting,
   shutdownServer,
@@ -94,4 +95,30 @@ DOMAIN,api.openai.com
     mode: 'suffix',
     raw: 'DOMAIN-SUFFIX,netflix.com',
   })
+})
+
+test('OpenClash config_path is resolved from UCI config without guessing provider URLs', () => {
+  assert.equal(
+    resolveOpenClashConfigPathFromUciForTesting(
+      `
+config openclash 'config'
+  option config_path '/etc/openclash/config/live.yaml'
+`,
+    ),
+    '/etc/openclash/config/live.yaml',
+  )
+
+  assert.equal(
+    resolveOpenClashConfigPathFromUciForTesting(
+      `
+config openclash 'config'
+  option config_path 'active.yaml'
+`,
+      {
+        configDir: '/tmp/openclash/config',
+        uciConfigPath: '/tmp/openclash/uci',
+      },
+    ),
+    '/tmp/openclash/config/active.yaml',
+  )
 })

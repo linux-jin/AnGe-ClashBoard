@@ -15,13 +15,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
 const distDir = path.join(rootDir, 'dist')
 const dataDir = path.join(rootDir, 'data')
-const bundledRuleSourceConfigPath = path.join(rootDir, 'config', 'rule-source.yaml')
 const dbPath = process.env.ZASHBOARD_DB_PATH || path.join(dataDir, 'zashboard.sqlite')
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 2048)
 const backgroundImageStorageKey = '__background_image__'
 const execFileAsync = promisify(execFile)
 const defaultRuleSourceConfigPath = path.join(dataDir, 'rule-source.yaml')
+const defaultOpenClashUciConfigPath = '/etc/config/openclash'
+const defaultOpenClashConfigDir = '/etc/openclash/config'
+const openClashUciConfigPath =
+  process.env.ZASHBOARD_OPENCLASH_UCI_PATH ||
+  process.env.OPENCLASH_UCI_PATH ||
+  defaultOpenClashUciConfigPath
+const openClashConfigDir =
+  process.env.ZASHBOARD_OPENCLASH_CONFIG_DIR ||
+  process.env.OPENCLASH_CONFIG_DIR ||
+  defaultOpenClashConfigDir
 const mihomoBinaryPath =
   process.env.ZASHBOARD_MIHOMO_BIN ||
   (process.platform === 'win32'
@@ -92,23 +101,8 @@ if ('serviceWorker' in navigator) {
 fs.mkdirSync(path.dirname(dbPath), { recursive: true })
 fs.mkdirSync(ruleSearchTempDir, { recursive: true })
 
-if (!process.env.ZASHBOARD_RULE_SOURCE_PATH) {
-  if (!fs.existsSync(defaultRuleSourceConfigPath) && fs.existsSync(bundledRuleSourceConfigPath)) {
-    fs.mkdirSync(path.dirname(defaultRuleSourceConfigPath), { recursive: true })
-    fs.writeFileSync(
-      defaultRuleSourceConfigPath,
-      stringifyManagedRuleSourceConfig(extractRuleProviderEntries(bundledRuleSourceConfigPath)),
-    )
-  }
-}
-
 const ruleSourceConfigPath =
-  process.env.ZASHBOARD_RULE_SOURCE_PATH ||
-  (fs.existsSync(defaultRuleSourceConfigPath)
-    ? defaultRuleSourceConfigPath
-    : fs.existsSync(bundledRuleSourceConfigPath)
-      ? bundledRuleSourceConfigPath
-      : '')
+  process.env.ZASHBOARD_RULE_SOURCE_PATH || defaultRuleSourceConfigPath
 
 const db = new DatabaseSync(dbPath)
 
@@ -524,10 +518,160 @@ const isValidEntries = (entries) => {
   )
 }
 
+function stripUciInlineComment(value) {
+  let quote = ''
+  let escaped = false
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]
+
+    if (escaped) {
+      escaped = false
+      continue
+    }
+
+    if (quote) {
+      if (quote === '"' && character === '\\') {
+        escaped = true
+        continue
+      }
+
+      if (character === quote) {
+        quote = ''
+      }
+
+      continue
+    }
+
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+
+    if (character === '#') {
+      return value.slice(0, index).trim()
+    }
+  }
+
+  return value.trim()
+}
+
+function parseUciValue(value) {
+  const normalizedValue = stripUciInlineComment(String(value || '')).trim()
+
+  if (!normalizedValue) {
+    return ''
+  }
+
+  const quote = normalizedValue[0]
+
+  if (quote === "'" || quote === '"') {
+    let parsedValue = ''
+    let escaped = false
+
+    for (let index = 1; index < normalizedValue.length; index += 1) {
+      const character = normalizedValue[index]
+
+      if (escaped) {
+        parsedValue += character
+        escaped = false
+        continue
+      }
+
+      if (quote === '"' && character === '\\') {
+        escaped = true
+        continue
+      }
+
+      if (character === quote) {
+        return parsedValue.trim()
+      }
+
+      parsedValue += character
+    }
+
+    return parsedValue.trim()
+  }
+
+  return normalizedValue.split(/\s+/)[0] || ''
+}
+
+function getOpenClashConfigPathFromUci(content) {
+  const configPaths = []
+
+  String(content || '')
+    .split(/\r?\n/)
+    .forEach((line) => {
+      const match = /^\s*option\s+config_path(?:\s+|=)(.+?)\s*$/.exec(line)
+
+      if (!match) {
+        return
+      }
+
+      const configPath = parseUciValue(match[1])
+
+      if (configPath) {
+        configPaths.push(configPath)
+      }
+    })
+
+  return configPaths.at(-1) || ''
+}
+
+function resolveOpenClashConfigPathValue(configPath, options = {}) {
+  const normalizedConfigPath = String(configPath || '').trim()
+
+  if (!normalizedConfigPath) {
+    return ''
+  }
+
+  if (path.isAbsolute(normalizedConfigPath)) {
+    return path.normalize(normalizedConfigPath)
+  }
+
+  const configDir = options.configDir || openClashConfigDir
+  const uciConfigPath = options.uciConfigPath || openClashUciConfigPath
+  const candidates = [
+    path.resolve(configDir, normalizedConfigPath),
+    path.resolve(path.dirname(uciConfigPath), normalizedConfigPath),
+  ]
+  const existingCandidate = candidates.find((candidate) => fs.existsSync(candidate))
+
+  return existingCandidate || candidates[0]
+}
+
+function resolveOpenClashConfigPathFromUci(content, options = {}) {
+  return resolveOpenClashConfigPathValue(getOpenClashConfigPathFromUci(content), options)
+}
+
+function resolveOpenClashRuleSourceConfigPath() {
+  if (!fs.existsSync(openClashUciConfigPath)) {
+    return ''
+  }
+
+  try {
+    const configPath = resolveOpenClashConfigPathFromUci(
+      fs.readFileSync(openClashUciConfigPath, 'utf8'),
+    )
+
+    return configPath && fs.existsSync(configPath) ? configPath : ''
+  } catch {
+    return ''
+  }
+}
+
+function getRuntimeRuleSourceConfigPath() {
+  if (process.env.ZASHBOARD_RULE_SOURCE_PATH) {
+    return ruleSourceConfigPath
+  }
+
+  return resolveOpenClashRuleSourceConfigPath()
+}
+
 function extractRuleProviderEntries(configPath) {
   if (!configPath || !fs.existsSync(configPath)) {
     throw new Error(
-      'Rule source config is not configured. Set ZASHBOARD_RULE_SOURCE_PATH or place rule-source.yaml under data/.',
+      'Rule source config is not configured. Mount the OpenClash UCI config_path source, or set ZASHBOARD_RULE_SOURCE_PATH.',
     )
   }
 
@@ -637,15 +781,10 @@ function getManagedRuleSourceCandidateMap() {
 
     candidateMap.set(entry.name, entry)
   }
+  const runtimeRuleSourceConfigPath = getRuntimeRuleSourceConfigPath()
 
-  if (fs.existsSync(defaultRuleSourceConfigPath)) {
-    extractRuleProviderEntries(defaultRuleSourceConfigPath).forEach(pushCandidate)
-  }
-
-  getCachedRuleProviderStatement.all().forEach(pushCandidate)
-
-  if (fs.existsSync(bundledRuleSourceConfigPath)) {
-    extractRuleProviderEntries(bundledRuleSourceConfigPath).forEach(pushCandidate)
+  if (runtimeRuleSourceConfigPath) {
+    extractRuleProviderEntries(runtimeRuleSourceConfigPath).forEach(pushCandidate)
   }
 
   return candidateMap
@@ -676,6 +815,19 @@ async function syncManagedRuleSourceConfigFromController(options = {}) {
     }
   }
 
+  const runtimeRuleSourceConfigPath = getRuntimeRuleSourceConfigPath()
+
+  if (!runtimeRuleSourceConfigPath) {
+    return {
+      changed: false,
+      updatedProviders: 0,
+      path: ruleSourceConfigPath,
+      skipped: true,
+      error:
+        'Rule source config is not configured. Mount the OpenClash UCI config_path source, or set ZASHBOARD_RULE_SOURCE_PATH.',
+    }
+  }
+
   const requestedProviderNames =
     Array.isArray(options.providerNames) && options.providerNames.length > 0
       ? [...new Set(options.providerNames.map((name) => String(name || '').trim()).filter(Boolean))]
@@ -697,14 +849,13 @@ async function syncManagedRuleSourceConfigFromController(options = {}) {
   const unresolvedProviders = []
 
   for (const providerName of referencedProviderNames) {
+    const controllerProvider = controllerProviderMap.get(providerName)
     const baseProvider = candidateMap.get(providerName)
 
     if (!baseProvider) {
       unresolvedProviders.push(providerName)
       continue
     }
-
-    const controllerProvider = controllerProviderMap.get(providerName)
 
     nextProviders.push({
       ...baseProvider,
@@ -734,11 +885,13 @@ async function syncManagedRuleSourceConfigFromController(options = {}) {
   }
 }
 
-function syncManagedRuleSourceConfigFromBundled() {
+function syncManagedRuleSourceConfigFromRuntimeSource() {
+  const runtimeRuleSourceConfigPath = getRuntimeRuleSourceConfigPath()
+
   if (
     process.env.ZASHBOARD_RULE_SOURCE_PATH ||
     ruleSourceConfigPath !== defaultRuleSourceConfigPath ||
-    !fs.existsSync(bundledRuleSourceConfigPath)
+    !runtimeRuleSourceConfigPath
   ) {
     return {
       changed: false,
@@ -748,18 +901,18 @@ function syncManagedRuleSourceConfigFromBundled() {
     }
   }
 
-  const bundledProviderEntries = extractRuleProviderEntries(bundledRuleSourceConfigPath)
+  const runtimeProviderEntries = extractRuleProviderEntries(runtimeRuleSourceConfigPath)
   const defaultConfigMissing = !fs.existsSync(defaultRuleSourceConfigPath)
   const currentProviderEntries = fs.existsSync(defaultRuleSourceConfigPath)
     ? extractRuleProviderEntries(defaultRuleSourceConfigPath)
     : []
   const currentProviderMap = new Map(currentProviderEntries.map((provider) => [provider.name, provider]))
-  const bundledProviderMap = new Map(bundledProviderEntries.map((provider) => [provider.name, provider]))
+  const runtimeProviderMap = new Map(runtimeProviderEntries.map((provider) => [provider.name, provider]))
   const currentProviderSignature = getRuleProviderSignature(currentProviderEntries)
-  const bundledProviderSignature = getRuleProviderSignature(bundledProviderEntries)
+  const runtimeProviderSignature = getRuleProviderSignature(runtimeProviderEntries)
   let updatedProviders = 0
 
-  for (const provider of bundledProviderEntries) {
+  for (const provider of runtimeProviderEntries) {
     const currentProvider = currentProviderMap.get(provider.name)
 
     if (
@@ -774,21 +927,21 @@ function syncManagedRuleSourceConfigFromBundled() {
   }
 
   for (const provider of currentProviderEntries) {
-    if (!bundledProviderMap.has(provider.name)) {
+    if (!runtimeProviderMap.has(provider.name)) {
       updatedProviders++
     }
   }
 
-  if (defaultConfigMissing || currentProviderSignature !== bundledProviderSignature) {
+  if (defaultConfigMissing || currentProviderSignature !== runtimeProviderSignature) {
     fs.mkdirSync(path.dirname(defaultRuleSourceConfigPath), { recursive: true })
     fs.writeFileSync(
       defaultRuleSourceConfigPath,
-      stringifyManagedRuleSourceConfig(bundledProviderEntries),
+      stringifyManagedRuleSourceConfig(runtimeProviderEntries),
     )
   }
 
   return {
-    changed: defaultConfigMissing || currentProviderSignature !== bundledProviderSignature,
+    changed: defaultConfigMissing || currentProviderSignature !== runtimeProviderSignature,
     updatedProviders,
     path: defaultRuleSourceConfigPath,
     skipped: false,
@@ -800,7 +953,11 @@ const getRuleProviderKind = (url, format, behavior) => {
   const normalizedFormat = format.toLowerCase()
   const normalizedBehavior = behavior.toLowerCase()
 
-  if (normalizedUrl.endsWith('.mrs') || normalizedFormat === 'mrs') {
+  if (
+    normalizedUrl.endsWith('.mrs') ||
+    normalizedFormat === 'mrs' ||
+    normalizedFormat === 'mrsrule'
+  ) {
     if (normalizedBehavior === 'ipcidr' || normalizedUrl.includes('/geoip/')) {
       return 'mrs-ip'
     }
@@ -2238,29 +2395,30 @@ const getRuleProviderCacheProviderCounts = () => {
 
 const getRuleProviderSourceUrlMap = () => {
   const sourceUrlMap = {}
+  const pushSourceUrlsFromConfig = (configPath, overwrite = false) => {
+    if (!configPath || !fs.existsSync(configPath)) {
+      return
+    }
 
-  try {
-    extractRuleProviderEntries(ruleSourceConfigPath).forEach((provider) => {
-      if (provider.name && provider.url) {
-        sourceUrlMap[provider.name] = provider.url
-      }
-    })
-  } catch {
-    // Ignore missing or invalid config and fall back to cached provider URLs below.
+    try {
+      extractRuleProviderEntries(configPath).forEach((provider) => {
+        if (provider.name && provider.url && (overwrite || !sourceUrlMap[provider.name])) {
+          sourceUrlMap[provider.name] = provider.url
+        }
+      })
+    } catch {
+      // Ignore missing or invalid source config; callers will see an empty source map.
+    }
   }
 
-  getCachedRuleProviderStatement.all().forEach((provider) => {
-    if (!sourceUrlMap[provider.name]) {
-      sourceUrlMap[provider.name] = normalizeRuleProviderUrl(provider.source_url)
-    }
-  })
+  pushSourceUrlsFromConfig(getRuntimeRuleSourceConfigPath(), true)
 
   return sourceUrlMap
 }
 
 const getRuleProviderOrderList = () => {
   try {
-    return extractRuleProviderEntries(ruleSourceConfigPath)
+    return extractRuleProviderEntries(getRuntimeRuleSourceConfigPath())
       .map((provider) => String(provider.name || '').trim())
       .filter(Boolean)
   } catch {
@@ -2398,11 +2556,11 @@ const updateRuleProviderCache = async (options = {}) => {
       try {
         ruleSourceConfigSync = {
           ...ruleSourceConfigSync,
-          ...syncManagedRuleSourceConfigFromBundled(),
+          ...syncManagedRuleSourceConfigFromRuntimeSource(),
           error: message,
         }
       } catch (fallbackError) {
-        console.warn('Failed to sync managed rule-source.yaml from bundled config before refresh', fallbackError)
+        console.warn('Failed to sync managed rule-source.yaml from runtime source before refresh', fallbackError)
         ruleSourceConfigSync = {
           ...ruleSourceConfigSync,
           error: message,
@@ -2410,7 +2568,7 @@ const updateRuleProviderCache = async (options = {}) => {
       }
     }
 
-    const providers = extractRuleProviderEntries(ruleSourceConfigPath)
+    const providers = extractRuleProviderEntries(getRuntimeRuleSourceConfigPath())
       .map((provider) => ({
         ...provider,
         kind: getRuleProviderKind(provider.url, provider.format, provider.behavior),
@@ -2428,7 +2586,7 @@ const updateRuleProviderCache = async (options = {}) => {
       name: providerName,
       url: '',
       message:
-        `Rule provider source URL is not configured for "${providerName}". Add it to data/rule-source.yaml or set ZASHBOARD_RULE_SOURCE_PATH.`,
+        `Rule provider source URL is not configured for "${providerName}". Mount the current OpenClash config_path source, or set ZASHBOARD_RULE_SOURCE_PATH.`,
     }))
     let updatedCount = 0
     let progressRules = 0
@@ -2854,7 +3012,7 @@ const searchRuleProviderCache = async (query, options = {}) => {
   const cachedProviders = getCachedRuleProviderStatement
     .all()
     .filter((provider) => !hasProviderFilter || providerNames.has(provider.name))
-  const configuredProviders = extractRuleProviderEntries(ruleSourceConfigPath).map((provider) => ({
+  const configuredProviders = extractRuleProviderEntries(getRuntimeRuleSourceConfigPath()).map((provider) => ({
     ...provider,
     kind: getRuleProviderKind(provider.url, provider.format, provider.behavior),
   }))
@@ -3487,6 +3645,7 @@ export {
   createAccessSessionToken as createAccessSessionTokenForTesting,
   db,
   getRequestAccessAuthStatus as getRequestAccessAuthStatusForTesting,
+  resolveOpenClashConfigPathFromUci as resolveOpenClashConfigPathFromUciForTesting,
   readSnapshot,
   replaceSnapshot,
   searchRuleProviderCache,
