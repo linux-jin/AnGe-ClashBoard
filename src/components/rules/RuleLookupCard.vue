@@ -52,7 +52,7 @@
           v-else
           class="text-sm"
         >
-          未在当前规则顺序中找到对应 RuleSet
+          {{ t('ruleLookupMissingRuleSet') }}
         </span>
       </div>
 
@@ -83,7 +83,7 @@
         <button
           class="btn btn-ghost btn-xs"
           type="button"
-          title="复制链接"
+          :title="t('copyLink')"
           @click="copyUrl(result.url)"
         >
           <DocumentDuplicateIcon class="h-3.5 w-3.5" />
@@ -101,8 +101,11 @@ import { getLatencyByName, proxyMap } from '@/store/proxies'
 import { displayLatencyInRule, displayNowNodeInRule } from '@/store/settings'
 import type { Rule } from '@/types'
 import { DocumentDuplicateIcon } from '@heroicons/vue/24/outline'
+import { useI18n } from 'vue-i18n'
 import ProxyGroupNow from '../proxies/ProxyGroupNow.vue'
 import ProxyName from '../proxies/ProxyName.vue'
+
+const { t } = useI18n()
 
 defineProps<{
   index: number

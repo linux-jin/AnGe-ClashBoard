@@ -386,17 +386,95 @@ const normalizeRuleSourcePlugin = (value) => {
 const getErrorMessage = (error) => (error instanceof Error ? error.message : String(error))
 const getErrorCode = (error) =>
   error && typeof error === 'object' && typeof error.code === 'string' ? error.code : ''
+const getErrorDetail = (error) =>
+  error && typeof error === 'object' && typeof error.detail === 'string' ? error.detail : ''
+
+const supportedLocales = ['en-US', 'zh-CN', 'zh-TW', 'ru-RU']
+const normalizeLocale = (value = '') => {
+  const normalizedValue = String(value || '').trim().toLowerCase()
+
+  if (normalizedValue.startsWith('zh-tw') || normalizedValue.startsWith('zh-hk')) {
+    return 'zh-TW'
+  }
+
+  if (normalizedValue.startsWith('zh')) {
+    return 'zh-CN'
+  }
+
+  if (normalizedValue.startsWith('ru')) {
+    return 'ru-RU'
+  }
+
+  if (normalizedValue.startsWith('en')) {
+    return 'en-US'
+  }
+
+  return 'zh-CN'
+}
+
+const getRequestLocale = (req) => {
+  const explicitLocale = req.get('x-zashboard-locale') || ''
+  const acceptLanguage = req.get('accept-language') || ''
+  const candidate = explicitLocale || acceptLanguage.split(',')[0] || ''
+
+  return normalizeLocale(candidate)
+}
+
+const ruleSourceSshRequiredMessages = {
+  'en-US': {
+    intro:
+      'Rule source sync requires an SSH account and password first, and rule source detection must pass.',
+    action:
+      'Go to "Settings - Backend - Edit backend configuration" > "Rule Source SSH", enter the SSH account and SSH password, choose the correct OpenClash/Nikki, then click "Detect rule source".',
+    detailPrefix: 'Current error:',
+  },
+  'zh-CN': {
+    intro: '规则源同步需要先配置 SSH 账号和密码，并确保规则源检测通过。',
+    action:
+      '请在“设置 - 后端 - 修改后端配置”的“规则源 SSH”中填写 SSH 账号、SSH 密码，选择正确的 OpenClash/Nikki 后点击“检测规则源”。',
+    detailPrefix: '当前错误：',
+  },
+  'zh-TW': {
+    intro: '規則源同步需要先配置 SSH 帳號和密碼，並確保規則源檢測通過。',
+    action:
+      '請在「設定 - 後端 - 修改後端配置」的「規則源 SSH」中填寫 SSH 帳號、SSH 密碼，選擇正確的 OpenClash/Nikki 後點擊「檢測規則源」。',
+    detailPrefix: '目前錯誤：',
+  },
+  'ru-RU': {
+    intro:
+      'Для синхронизации источников правил сначала укажите SSH-аккаунт и пароль, а затем убедитесь, что проверка источника правил проходит успешно.',
+    action:
+      'Откройте «Настройки - Бэкенд - Редактировать конфигурацию бэкенда» > «SSH источников правил», введите SSH-аккаунт и SSH-пароль, выберите правильный OpenClash/Nikki и нажмите «Проверить источник правил».',
+    detailPrefix: 'Текущая ошибка:',
+  },
+}
+
+const createRuleSourceSshRequiredMessage = (detail = '', locale = 'zh-CN') => {
+  const messages =
+    ruleSourceSshRequiredMessages[supportedLocales.includes(locale) ? locale : normalizeLocale(locale)] ||
+    ruleSourceSshRequiredMessages['zh-CN']
+  const message = [messages.intro, messages.action]
+
+  if (detail) {
+    message.push(`${messages.detailPrefix}${detail}`)
+  }
+
+  return message.join(' ')
+}
+
+const getLocalizedErrorMessage = (error, req) => {
+  if (getErrorCode(error) === RULE_SOURCE_SSH_REQUIRED_CODE) {
+    return createRuleSourceSshRequiredMessage(getErrorDetail(error), getRequestLocale(req))
+  }
+
+  return getErrorMessage(error)
+}
 
 const createRuleSourceSshRequiredError = (detail = '') => {
-  const message = [
-    '规则源同步需要先配置 SSH 账号和密码，并确保规则源检测通过。',
-    '请在“修改后端配置”的“规则源 SSH”中填写 SSH 账号、SSH 密码，选择正确的 OpenClash/Nikki 后点击“检测规则源”。',
-    detail ? `当前错误：${detail}` : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
+  const message = createRuleSourceSshRequiredMessage(detail)
   const error = new Error(message)
   error.code = RULE_SOURCE_SSH_REQUIRED_CODE
+  error.detail = detail
 
   return error
 }
@@ -3561,7 +3639,7 @@ app.post('/api/rule-provider-cache/update', async (_req, res) => {
   } catch (error) {
     res.status(500).json({
       code: getErrorCode(error),
-      message: getErrorMessage(error),
+      message: getLocalizedErrorMessage(error, _req),
     })
   }
 })
@@ -3592,7 +3670,7 @@ app.post('/api/rule-refresh/start', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       code: getErrorCode(error),
-      message: getErrorMessage(error),
+      message: getLocalizedErrorMessage(error, req),
     })
   }
 })

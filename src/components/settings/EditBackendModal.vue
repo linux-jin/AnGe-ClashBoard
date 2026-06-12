@@ -86,10 +86,10 @@
         </div>
 
         <div class="border-base-content/10 flex flex-col gap-3 border-t pt-3">
-          <div class="text-sm font-medium">规则源 SSH</div>
+          <div class="text-sm font-medium">{{ t('ruleSourceSsh') }}</div>
           <div class="grid gap-3 sm:grid-cols-2">
             <div class="flex flex-col gap-1">
-              <label class="text-sm">SSH 端口</label>
+              <label class="text-sm">{{ t('ruleSourceSshPort') }}</label>
               <TextInput
                 class="w-full"
                 v-model="editForm.ruleSourceSshPort"
@@ -97,18 +97,18 @@
               />
             </div>
             <div class="flex flex-col gap-1">
-              <label class="text-sm">OpenClash/Nikki</label>
+              <label class="text-sm">{{ t('ruleSourcePlugin') }}</label>
               <select
                 class="select select-sm w-full"
                 v-model="editForm.ruleSourcePlugin"
               >
-                <option value="auto">自动检测</option>
+                <option value="auto">{{ t('autoDetect') }}</option>
                 <option value="openclash">OpenClash</option>
                 <option value="nikki">Nikki</option>
               </select>
             </div>
             <div class="flex flex-col gap-1">
-              <label class="text-sm">SSH 账号</label>
+              <label class="text-sm">{{ t('ruleSourceSshUsername') }}</label>
               <TextInput
                 class="w-full"
                 v-model="editForm.ruleSourceSshUsername"
@@ -116,7 +116,7 @@
               />
             </div>
             <div class="flex flex-col gap-1">
-              <label class="text-sm">SSH 密码</label>
+              <label class="text-sm">{{ t('ruleSourceSshPassword') }}</label>
               <input
                 type="password"
                 class="input input-sm w-full"
@@ -135,7 +135,7 @@
                 v-if="isTestingRuleSourceSsh"
                 class="loading loading-spinner loading-xs"
               ></span>
-              检测规则源
+              {{ t('detectRuleSource') }}
             </button>
             <span
               v-if="ruleSourceSshStatus"
@@ -289,14 +289,21 @@ const detectRuleSourceSsh = async () => {
     } | null
 
     if (!response.ok) {
-      throw new Error(data?.message || `检测规则源失败: ${response.status}`)
+      throw new Error(data?.message || t('detectRuleSourceFailed', { status: response.status }))
     }
 
-    const availablePlugins = data?.availablePlugins?.length
-      ? `，可用 ${data.availablePlugins.join(' / ')}`
+    const availablePlugins =
+      data?.availablePlugins?.length
+        ? t('ruleSourceDetectedAvailable', {
+            plugins: data.availablePlugins.join(' / '),
+          })
       : ''
-    ruleSourceSshStatus.value =
-      `已检测到 ${data?.plugin || '-'}：${data?.configPath || '-'}，规则源 ${data?.providerCount || 0} 个${availablePlugins}`
+    ruleSourceSshStatus.value = t('ruleSourceDetected', {
+      plugin: data?.plugin || '-',
+      path: data?.configPath || '-',
+      count: `${data?.providerCount || 0}`,
+      availablePlugins,
+    })
     showNotification({
       content: ruleSourceSshStatus.value,
       type: 'alert-success',

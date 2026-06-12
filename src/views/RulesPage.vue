@@ -17,7 +17,7 @@
               v-if="isRuleLookupLoading"
               class="card app-card-padding text-sm"
             >
-              正在查询规则缓存...
+              {{ t('ruleLookupLoading') }}
             </div>
             <div
               v-else-if="ruleLookupError"
@@ -30,19 +30,19 @@
                 v-if="ruleLookupResults.length === 0 && ruleLookupDirectRules.length === 0"
                 class="card app-card-padding text-sm"
               >
-                <div>未命中规则缓存。</div>
+                <div>{{ t('ruleLookupEmpty') }}</div>
                 <div
                   v-if="ruleLookupUnsupported.length > 0"
                   class="text-base-content/70 mt-1 text-xs"
                 >
-                  当前还有 {{ ruleLookupUnsupported.length }} 个 `.mrs` 规则集暂不支持解析。
+                  {{ t('ruleLookupUnsupportedHint', { count: ruleLookupUnsupported.length }) }}
                 </div>
               </div>
               <div
                 v-else
                 class="card app-card-padding text-sm"
               >
-                只查询10行最相关数据：
+                {{ t('ruleLookupTopMatches') }}
               </div>
               <RuleFallbackCard
                 v-if="
@@ -68,7 +68,7 @@
                 v-if="ruleLookupUnsupported.length > 0"
                 class="card app-card-padding text-xs"
               >
-                暂不支持解析的规则集：
+                {{ t('ruleLookupUnsupportedProviders') }}
                 {{ ruleLookupUnsupported.map((item) => item.name).join('、') }}
               </div>
             </template>
@@ -151,10 +151,12 @@ import {
 } from '@/store/rules'
 import type { Rule } from '@/types'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const autoRuleCacheBootstrapAttempted = ref(false)
 const observedRefreshRunId = ref(0)
 const isRulesTabHydrated = ref(false)
+const { t } = useI18n()
 
 const syncRuleCacheStats = async () => {
   try {
